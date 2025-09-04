@@ -1,0 +1,26 @@
+config {
+	compiler: clang
+	build_dir: build/
+	default_flags: -Wall -Wextra
+}
+
+target executable checksum {
+	auto_discovery: true
+	sources: src/
+	flags: -O3 -mavx2
+	output: build/bin/checksum
+}
+
+target debug checksum_debug {
+	auto_discovery: true
+	sources: src/
+	flags: -O0 -g3 -fsanitize=address -Weverything
+	output: build/debug/checksum_debug
+}
+
+target test checksum_tests{
+	auto_discovery: false
+	sources: tests/test_main.c
+	flags: -g -Weverything
+	output: build/tests/checksum_test
+}
