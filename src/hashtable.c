@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -20,8 +21,8 @@ uint32_t hash_string(const char* str) {
 static uint32_t hash_content(const char* buffer, const char* name, struct stat st) {
     uint32_t hash = 5381;
 
-    for (uint8_t i = 0; i < strlen(name); i++) {
-        hash = ((hash << 5) + hash) + name[i];
+    for (const char* p = name; *p; p++) {
+        hash = ((hash << 5) + hash) + (unsigned char) *p; 
     }
 
     hash ^= (uint32_t) st.st_size;
@@ -191,7 +192,7 @@ static uint32_t node_add_dependency(Arena* arena, HashTable* ht, Node* node, con
 uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const char* src) {
     Node* node = search_path(ht, dest);
     if (!node) {
-        if (insert_hashtable(arena, ht, src) != 0) {
+        if (insert_hashtable(arena, ht, dest) != 0) {
             return 1;
         }
 
@@ -199,4 +200,21 @@ uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const cha
     }
 
     return node_add_dependency(arena, ht, node, src);
+}
+
+void print_hashtable(HashTable* ht) {
+    printf("\n=== HashTable ===\n\n");
+
+    for (int i = 0; i < ht -> capacity; i++) {
+        if (ht -> nodes[i]) {
+            Node* current = ht -> nodes[i];
+
+            printf("Node %d:\n", i);
+            printf("  Path: %s\n", current -> path);
+            printf("  Name: %s\n", current -> filename);
+            printf("  Content Hash: %u (Hex: %x)\n\n", current -> content_hash, current -> content_hash);
+        }
+    }
+
+    printf("\n=== END of HT ===\n");
 }

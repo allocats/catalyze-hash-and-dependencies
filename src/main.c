@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "arena.h"
+#include "hashtable.h"
 
 static Arena arena = {0};
 
@@ -19,24 +20,6 @@ const char* files[FILE_COUNT] = {
     "test/foo.c",
     "test/foo.h",
 };
-
-uint32_t checksum(const char* buffer, const char* name, struct stat st) {
-    uint32_t hash = 5381;
-
-    for (uint8_t i = 0; i < strlen(name); i++) {
-        hash = ((hash << 5) + hash) + name[i];
-    }
-
-    hash ^= (uint32_t) st.st_size;
-    hash ^= (uint32_t) (st.st_size >> 32);
-    hash ^= st.st_mtim.tv_nsec;
-
-    for (size_t i = 0; i < st.st_size; i++) {
-        hash = ((hash << 5) + hash) + buffer[i];
-    }
-
-    return hash;
-}
 
 void parse_include(const char* buffer) {
     while (*buffer != '"') {
@@ -141,34 +124,24 @@ void search_for_preprocessor(const char* buffer, size_t size) {
 
 }
 
+void cleanup_and_exit(int code) {
+    arena_free(&arena);
+    exit(code);
+}
+
 int main() {
-    for (int i = 0; i < FILE_COUNT; i++) {
-        int fd = open(files[i], O_RDONLY);
-        if (fd == -1) {
-            fprintf(stderr, "File not found!\n");
-            return 1;
-        }
-
-        struct stat st;
-        if (fstat(fd, &st) == -1) {
-            fprintf(stderr, "fstat failed!\n");
-            return 1;
-        }
-
-        char* buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
-        if (buffer == MAP_FAILED) {
-            fprintf(stderr, "Unable to allocate file!\n");
-            return 1;
-        }
-
-        uint32_t hash = checksum(buffer, files[i], st);
-        fprintf(stdout, "\n%s Hash: %x\n", files[i], hash);
-
-        search_for_preprocessor(buffer, st.st_size);
-
-        munmap(buffer, st.st_size);
-        close(fd);
+    HashTable* ht = create_hashtable(&arena, 16);
+    if (!ht) {
+        cleanup_and_exit(1);
     }
 
-    return 0;
+    for (int i = 0; i < FILE_COUNT; i++) {
+        if (insert_hashtable(&arena, ht, files[i]) != 0) {
+            cleanup_and_exit(1);
+        }
+    }
+
+    print_hashtable(ht);
+
+    cleanup_and_exit(0);
 }
