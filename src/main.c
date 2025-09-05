@@ -7,6 +7,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "arena.h"
+
+static Arena arena = {0};
+
 #define FILE_COUNT 4
 
 const char* files[FILE_COUNT] = {
@@ -16,11 +20,7 @@ const char* files[FILE_COUNT] = {
     "test/foo.h",
 };
 
-size_t align_32(size_t size) {
-    return (size + 31) & ~(31);
-}
-
-uint32_t checksum(const char* name, struct stat st) {
+uint32_t checksum(const char* buffer, const char* name, struct stat st) {
     uint32_t hash = 5381;
 
     for (uint8_t i = 0; i < strlen(name); i++) {
@@ -30,6 +30,10 @@ uint32_t checksum(const char* name, struct stat st) {
     hash ^= (uint32_t) st.st_size;
     hash ^= (uint32_t) (st.st_size >> 32);
     hash ^= st.st_mtim.tv_nsec;
+
+    for (size_t i = 0; i < st.st_size; i++) {
+        hash = ((hash << 5) + hash) + buffer[i];
+    }
 
     return hash;
 }
@@ -103,10 +107,9 @@ void search_for_preprocessor(const char* buffer, size_t size) {
     __m256i char_match = _mm256_set1_epi8('#');
 
     const char* current = buffer;
-    const char* end = buffer + size;
-    int i = 0;
+    size_t processed = 0;
 
-    while (current < end) {
+    while (processed + 32 <= size) {
         __m256i str = _mm256_lddqu_si256((__m256i*) current);
         __m256i result = _mm256_cmpeq_epi8(str, char_match);
         int mask = _mm256_movemask_epi8(result);
@@ -114,7 +117,7 @@ void search_for_preprocessor(const char* buffer, size_t size) {
         if (mask != 0) {
             while (mask != 0) {
                 int pos = __builtin_ctz(mask);
-                size_t abs_pos = i * 32 + pos;
+                size_t abs_pos = processed + pos;
 
                 if (abs_pos > size) break;
 
@@ -127,8 +130,15 @@ void search_for_preprocessor(const char* buffer, size_t size) {
         }
 
         current += 32;
-        i++;
+        processed += 32;
     }
+
+    for (size_t i = processed; i < size; i++) {
+        if (buffer[i] == '#' && strncmp(buffer + i + 1, "include", 7) == 0) {
+            parse_include(buffer + i + 8);
+        }
+    }
+
 }
 
 int main() {
@@ -145,17 +155,16 @@ int main() {
             return 1;
         }
 
-        uint32_t hash = checksum(files[i], st);
-        fprintf(stdout, "\n%s Hash: %x\n", files[i], hash);
-
         char* buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
         if (buffer == MAP_FAILED) {
             fprintf(stderr, "Unable to allocate file!\n");
             return 1;
         }
 
-        size_t size = align_32(st.st_size);
-        search_for_preprocessor(buffer, size);
+        uint32_t hash = checksum(buffer, files[i], st);
+        fprintf(stdout, "\n%s Hash: %x\n", files[i], hash);
+
+        search_for_preprocessor(buffer, st.st_size);
 
         munmap(buffer, st.st_size);
         close(fd);
