@@ -2,12 +2,14 @@
 #include <immintrin.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "arena.h"
+#include "hashtable.h"
 
 static Arena arena = {0};
 
@@ -19,6 +21,18 @@ const char* files[FILE_COUNT] = {
     "test/foo.c",
     "test/foo.h",
 };
+
+typedef struct {
+    uint32_t* name_hashes;
+    uint32_t* content_hashes;
+    uint8_t count;
+    uint8_t capacity;
+} CachedFiles;
+
+void cleanup_and_exit(int code) {
+    arena_free(&arena);
+    exit(code);
+}
 
 uint32_t checksum(const char* buffer, const char* name, struct stat st) {
     uint32_t hash = 5381;
@@ -141,34 +155,127 @@ void search_for_preprocessor(const char* buffer, size_t size) {
 
 }
 
+CachedFiles* parse_cache(char* buffer) {
+    CachedFiles* cache = arena_alloc(&arena, sizeof(*cache));
+
+    cache -> name_hashes = arena_array_zero(&arena, uint32_t, FILE_COUNT);
+    cache -> content_hashes = arena_array_zero(&arena, uint32_t, FILE_COUNT);
+    cache -> count = 0;
+    cache -> capacity = FILE_COUNT;
+
+    char* current = buffer; 
+
+    while (*current != '\0' && cache -> count < cache -> capacity) {
+        char* token = strchr(current, ',');
+        if (!token) {
+            break;
+        }
+
+        size_t len = token - current;
+        char temp = current[len];
+        current[len] = '\0';
+        cache -> name_hashes[cache -> count] = (uint32_t) strtoul(current, NULL, 16);
+        current[len] = temp;
+
+        current = token + 1;
+
+        token = strchr(current, ',');
+        if (!token) {
+            len = strlen(current);
+        } else {
+            len = token - current;
+        }
+
+        temp = current[len];
+        current[len] = '\0';
+        cache -> content_hashes[cache -> count] = (uint32_t) strtoul(current, NULL, 16);
+        current[len] = temp;
+
+        cache -> count++;
+
+        if (!token) {
+            break;
+        }
+
+        current = token + 1;
+    }
+
+    return cache;
+}
+
+CachedFiles* load_hashes() {
+    int fd = open("catalyze.cache", O_RDONLY);
+    if (fd == -1) {
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        fprintf(stderr, "fstat failed!\n");
+        cleanup_and_exit(1);
+    }
+
+    char* buffer = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0); 
+    if (buffer == MAP_FAILED) {
+        fprintf(stderr, "Unable to allocate file!\n");
+        cleanup_and_exit(1);
+    }
+
+    CachedFiles* result = parse_cache(buffer);
+
+    close(fd);
+    munmap(buffer, st.st_size);
+    return result;
+}
+
+void print_cache(CachedFiles* cache) {
+    for (int i = 0; i < cache -> count; i++) {
+        printf("Cache: %x, %x\n", cache -> name_hashes[i], cache -> content_hashes[i]);
+    }
+}
+
 int main() {
+    CachedFiles* cache = load_hashes();
+
+    if (cache == NULL) {
+        // no cache
+    } else {
+        print_cache(cache);
+    }
+
+    HashTable* ht = create_hashtable(&arena, 128);
+
+    if (!ht) {
+        cleanup_and_exit(1);
+    }
+
     for (int i = 0; i < FILE_COUNT; i++) {
         int fd = open(files[i], O_RDONLY);
         if (fd == -1) {
             fprintf(stderr, "File not found!\n");
-            return 1;
+            cleanup_and_exit(1);
         }
 
         struct stat st;
         if (fstat(fd, &st) == -1) {
             fprintf(stderr, "fstat failed!\n");
-            return 1;
+            cleanup_and_exit(1);
         }
 
         char* buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
         if (buffer == MAP_FAILED) {
             fprintf(stderr, "Unable to allocate file!\n");
-            return 1;
+            cleanup_and_exit(1);
         }
 
-        uint32_t hash = checksum(buffer, files[i], st);
-        fprintf(stdout, "\n%s Hash: %x\n", files[i], hash);
-
-        search_for_preprocessor(buffer, st.st_size);
+        insert_hashtable(&arena, ht, files[i]);
+        // search_for_preprocessor(buffer, st.st_size);
 
         munmap(buffer, st.st_size);
         close(fd);
     }
 
-    return 0;
+    print_hashtable(ht);
+
+    cleanup_and_exit(0);
 }

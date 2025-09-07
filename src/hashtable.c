@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -199,4 +200,18 @@ uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const cha
     }
 
     return node_add_dependency(arena, ht, node, src);
+}
+
+void print_hashtable(HashTable* ht) {
+    printf("\n=== HashTable ===\n\n");
+
+    for (int i = 0; i < ht -> capacity; i++) {
+        Node* node = ht -> nodes[i];
+        if (node) {
+            printf("Node %d:\n", i);
+            printf("\tName: %s\n", node -> filename);
+            printf("\tPath: %s\n", node -> path);
+            printf("\tContent-Hash: %x\n\n", node -> content_hash);
+        }
+    }
 }

@@ -30,4 +30,6 @@ uint32_t add_dependency(Arena* arean, HashTable* ht, const char* dest, const cha
 Node* search_path(HashTable* ht, const char* path);
 Node* search_name(HashTable* ht, const char* name);
 
+void print_hashtable(HashTable* ht);
+
 #endif // !HASHTABLE_H
