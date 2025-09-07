@@ -91,6 +91,10 @@ static Node* create_node(Arena* arena, const char* path) {
     return node;
 }
 
+static inline uint8_t align_capacity(uint8_t capacity) {
+    return 1 << (32 - __builtin_clz(capacity - 1));
+}
+
 HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
     HashTable* ht = arena_alloc(arena, sizeof(HashTable));
 
@@ -99,8 +103,8 @@ HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
     }
 
     ht -> count = 0;
-    ht -> capacity = capacity;
-    ht -> nodes = arena_array_zero(arena, Node*, capacity);
+    ht -> capacity = align_capacity(capacity);
+    ht -> nodes = arena_array_zero(arena, Node*, ht -> capacity);
 
     if (!ht -> nodes) {
         return NULL;
@@ -111,7 +115,7 @@ HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
 
 uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path) {
     uint32_t hash = hash_string(path);
-    uint32_t idx = hash % ht -> capacity;
+    uint32_t idx = hash & (ht -> capacity - 1);
 
     Node* current = ht -> nodes[idx];
     while (current) {
@@ -135,7 +139,7 @@ uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path) {
 
 Node* search_path(HashTable* ht, const char* path) {
     uint32_t hash = hash_string(path);
-    uint32_t idx = hash % ht -> capacity;
+    uint32_t idx = hash & (ht -> capacity - 1);
     
     Node* node = ht -> nodes[idx];
     while (node) {
@@ -162,6 +166,10 @@ Node* search_name(HashTable* ht, const char* name) {
     }
 
     return NULL;
+}
+
+inline Node* search_hash(HashTable* ht, uint32_t hash) {
+    return ht -> nodes[hash & (ht -> capacity - 1)] ? ht -> nodes[hash & (ht -> capacity - 1)] : NULL;
 }
 
 static uint32_t node_add_dependency(Arena* arena, HashTable* ht, Node* node, const char* src) {
@@ -204,6 +212,9 @@ uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const cha
 
 void print_hashtable(HashTable* ht) {
     printf("\n=== HashTable ===\n\n");
+    printf("Stats:\n");
+    printf("\tCount: %d\n", ht -> count);
+    printf("\tCapacity: %d\n\n", ht -> capacity);
 
     for (int i = 0; i < ht -> capacity; i++) {
         Node* node = ht -> nodes[i];
@@ -214,4 +225,6 @@ void print_hashtable(HashTable* ht) {
             printf("\tContent-Hash: %x\n\n", node -> content_hash);
         }
     }
+    
+    printf("\n=== End of HT ===\n");
 }
