@@ -4,33 +4,31 @@
 #include "arena.h"
 
 #include <stdint.h>
-#include <sys/stat.h>
 
+// Note: The index will be bounded to the filename, for example test/foo.h = foo.h, and that gets hashed
 typedef struct Node {
-    uint32_t content_hash;
     char* path;
-    char* filename;
-    char** dependencies;
-    uint8_t dep_count;
-    uint8_t dep_capacity;
+    char* name;
+    uint32_t content_hash;
+    size_t dep_count;
+    size_t dep_capacity;
+    struct Node** dependencies;
     struct Node* next;
 } Node;
 
 typedef struct {
+    Arena* arena;
     Node** nodes;
-    uint8_t count;
-    uint8_t capacity;
+    size_t count;
+    size_t capacity;
 } HashTable;
 
-uint32_t hash_string(const char* str);
-char* extract_name(Arena* arena, const char* path);
+uint32_t hash_path(const char* path);
+HashTable* create_hashtable(Arena* arena, size_t capacity);
 
-HashTable* create_hashtable(Arena* arena, uint8_t capacity);
-uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path, const char* buffer, struct stat st);
-uint32_t add_dependency(Arena* arean, HashTable* ht, const char* dest, const char* src, const char* buffer, struct stat st);
-
-Node* search_path(HashTable* ht, const char* path);
-Node* search_name(HashTable* ht, const char* name);
+Node* insert_ht(HashTable* ht, const char* path, uint32_t content_hash);
+Node* get_ht(HashTable* ht, const char* path);
+int add_dependency(HashTable* ht, const char* file, const char* include); 
 
 void print_hashtable(HashTable* ht);
 

@@ -53,17 +53,12 @@ void parse_include(HashTable* ht, const char* file, const char* buffer, struct s
     strncpy(copy, start, len);
     copy[len] = 0;
 
-    if (add_dependency(&arena, ht, extract_name(&arena, copy), file, buffer, st) != 0) {
+    if (add_dependency(ht, file, copy) != 0) {
         fprintf(stderr, "Failed to add_dependency");
         cleanup_and_exit(1);
     }
 
     copy[len - 1] = 'c';
-
-    Node* c_file = search_name(ht, extract_name(&arena, copy));
-    if (c_file) {
-        // add to compile list
-    }
 }
 
 void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, const char* file) {
@@ -203,8 +198,13 @@ void load_hashtable(HashTable* ht, uint8_t count) {
             cleanup_and_exit(1);
         }
 
-        insert_hashtable(&arena, ht, files[i], buffer, st);
 
+        uint32_t hash = 5381;
+        for (const char* p = buffer; *p; p++) {
+            hash = ((hash << 5) + hash) ^ (unsigned char)*p;
+        }
+
+        insert_ht(ht, files[i], hash);
         search_for_preprocessor(ht, buffer, st, files[i]);
 
         munmap(buffer, st.st_size);

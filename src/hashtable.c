@@ -2,81 +2,57 @@
 
 #include "arena.h"
 
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-uint32_t hash_string(const char* str) {
+uint32_t hash_path(const char* path) {
+    const char* slash = strrchr(path, '/');
+    path = slash ? slash + 1 : path;
+
     uint32_t hash = 5381;
-    for (const char* p = str; *p; p++) {
-        hash = ((hash << 5) + hash) + (unsigned char)*p;
-    }
-    return hash;
-}
-
-static uint32_t hash_content(const char* buffer, const char* name, struct stat st) {
-    uint32_t hash = 5381;
-
-    for (uint8_t i = 0; i < strlen(name); i++) {
-        hash = ((hash << 5) + hash) + name[i];
-    }
-
-    hash ^= (uint32_t) st.st_size;
-    hash ^= (uint32_t) (st.st_size >> 32);
-    hash ^= st.st_mtim.tv_nsec;
-
-    for (size_t i = 0; i < st.st_size; i++) {
-        hash = ((hash << 5) + hash) + buffer[i];
+    for (const char* p = path; *p; p++) {
+        hash = ((hash << 5) + hash) ^ (unsigned char)*p;
     }
 
     return hash;
 }
 
-char* extract_name(Arena* arena, const char* path) {
-    const char* last_slash = strrchr(path, '/');
-    const char* start = last_slash ? last_slash + 1 : path;
-    return arena_strdup(arena, start);
+static inline size_t align_capacity(size_t capacity) {
+    return 1 << (32 - __builtin_clz(capacity - 1));
 }
 
-static Node* create_node(Arena* arena, const char* path, const char* buffer, struct stat st) {
-    Node* node = arena_alloc(arena, sizeof(Node));
-
+static Node* create_node(Arena* arena, const char* path, uint32_t content_hash) {
+    Node* node = arena_alloc(arena, sizeof(*node));
     if (!node) {
         return NULL;
     }
 
     node -> path = arena_strdup(arena, path);
-    node -> filename = extract_name(arena, path);
-    node -> content_hash = hash_content(path, buffer, st);
+    const char* slash = strrchr(path, '/');
+    node -> name = arena_strdup(arena, (slash ? slash + 1 : path));
 
-    node -> dependencies = arena_array_zero(arena, char*, 4);
+    node -> content_hash = content_hash;
     node -> dep_count = 0;
-    node -> dep_capacity = 4;
+    node -> dep_capacity = 2;
 
+    node -> dependencies = arena_array_zero(arena, Node*, node -> dep_capacity);
     node -> next = NULL;
 
-    if (node -> content_hash == 0 || !node -> path || !node -> filename || !node -> dependencies) {
+    if (!node -> dependencies) {
         return NULL;
     }
-
+    
     return node;
 }
 
-static inline uint8_t align_capacity(uint8_t capacity) {
-    return 1 << (32 - __builtin_clz(capacity - 1));
-}
-
-HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
-    HashTable* ht = arena_alloc(arena, sizeof(HashTable));
-
+HashTable* create_hashtable(Arena* arena, size_t capacity) {
+    HashTable* ht = arena_alloc(arena, sizeof(*ht));
     if (!ht) {
         return NULL;
     }
 
+    ht -> arena = arena;
     ht -> count = 0;
     ht -> capacity = align_capacity(capacity);
     ht -> nodes = arena_array_zero(arena, Node*, ht -> capacity);
@@ -88,114 +64,100 @@ HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
     return ht;
 }
 
-uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path, const char* buffer, struct stat st) {
-    uint32_t hash = hash_string(extract_name(arena, path));
-    uint32_t idx = hash & (ht -> capacity - 1);
-
-    Node* current = ht -> nodes[idx];
-    while (current) {
-        if (strcmp(current -> path, path) == 0) {
-            current -> content_hash = hash_content(buffer, extract_name(arena, path), st);
-            return 0;
-        }
-        current = current -> next;
-    }
-
-    Node* node = create_node(arena, path, buffer, st);
-    if (!node) {
-        return 1;
-    }
-
-    node -> next = ht -> nodes[idx];
-    ht -> nodes[idx] = node;
-    ht -> count++;
-    return 0;
-}
-
-Node* search_path(HashTable* ht, const char* path) {
-    uint32_t hash = hash_string(path);
-    uint32_t idx = hash & (ht -> capacity - 1);
-    
+Node* get_ht(HashTable* ht, const char* path) {
+    uint32_t hash = hash_path(path);
+    size_t idx = hash & (ht -> capacity - 1);
     Node* node = ht -> nodes[idx];
+
     while (node) {
         if (strcmp(node -> path, path) == 0) {
             return node;
         }
-
         node = node -> next;
     }
 
     return NULL;
 }
 
-Node* search_name(HashTable* ht, const char* name) {
-    for (int i = 0; i < ht -> capacity; i++) {
-        Node* current = ht -> nodes[i];
-        while (current) {
-            if (strcmp(current -> filename, name) == 0) {
-                return current;
-            }
+Node* insert_ht(HashTable* ht, const char* path, uint32_t content_hash) {
+    if (ht -> count >= ht -> capacity) {
+        ht -> nodes = arena_realloc(ht -> arena, ht -> nodes, sizeof(Node*) * ht -> capacity, sizeof(Node*) * ht -> capacity * 2);
+        ht -> capacity *= 2;
 
-            current = current -> next;
+        if (!ht -> nodes) {
+            return NULL;
         }
     }
 
-    return NULL;
+    uint32_t hash = hash_path(path);
+    size_t idx = hash & (ht -> capacity - 1);
+    Node* node = ht -> nodes[idx];
+
+    while (node) {
+        if (strcmp(node -> path, path) == 0) {
+            node -> content_hash = content_hash;
+            return node;
+        }
+        node = node -> next;
+    }
+
+    node = create_node(ht -> arena, path, content_hash);
+    if (!node) {
+        return NULL;
+    }
+
+    node -> next = ht -> nodes[idx];
+    ht -> nodes[idx] = node;
+    ht -> count++;
+
+    return node;
 }
 
-inline Node* search_hash(HashTable* ht, uint32_t hash) {
-    return ht -> nodes[hash & (ht -> capacity - 1)] ? ht -> nodes[hash & (ht -> capacity - 1)] : NULL;
-}
+static int node_add_dependency(Arena* arena, Node* src, Node* dep) {
+    if (src -> dep_count >= src -> dep_capacity) {
+        src -> dependencies = arena_realloc(arena, src -> dependencies, sizeof(Node) * src -> dep_capacity, sizeof(Node) * src -> dep_capacity * 2);
 
-static uint32_t node_add_dependency(Arena* arena, HashTable* ht, Node* node, const char* src) {
-    for (uint8_t i = 0; i < node -> dep_count; i++) {
-        if (strcmp(node -> dependencies[i], src) == 0) {
-            return 1;
-        }
-    }
-
-    if (node -> dep_count >= node -> dep_capacity) {
-        node -> dependencies = arena_realloc(arena, node -> dependencies, node -> dep_capacity, node -> dep_capacity * 2);
-        if (!node -> dependencies) {
-            return 1;
+        if (!src -> dependencies) {
+            return -1;
         }
 
-        node -> dep_capacity *= 2;
+        src -> dep_capacity *= 2;
     }
 
-    node -> dependencies[node -> dep_count] = arena_strdup(arena, src); 
-    if (!node -> dependencies[node -> dep_count]) {
-        return 1;
-    }
-
-    node -> dep_count++;
+    src -> dependencies[src -> dep_count++] = dep;
     return 0;
 }
 
-uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const char* src, const char* buffer, struct stat st) {
-    Node* node = search_path(ht, src);
-    if (!node) {
-        if (insert_hashtable(arena, ht, src, buffer, st) != 0) {
-            return 1;
-        }
+int add_dependency(HashTable* ht, const char* file, const char* include) {
+    Node* file_node = get_ht(ht, file);
+    Node* include_node = get_ht(ht, include);
 
-        node = search_path(ht, src);
+    if (!file_node) {
+        file_node = insert_ht(ht, file, 0);
     }
 
-    return node_add_dependency(arena, ht, node, dest);
+    if (!include_node) {
+        include_node = insert_ht(ht, include, 0);
+    }
+
+    if (!file_node || !include_node) {
+        return -1;
+    }
+
+    return node_add_dependency(ht -> arena, file_node, include_node);
 }
 
 void print_hashtable(HashTable* ht) {
     printf("\n=== HashTable ===\n\n");
     printf("Stats:\n");
-    printf("  Count: %d\n", ht -> count);
-    printf("  Capacity: %d\n", ht -> capacity);
+    printf("  Count: %zu\n", ht -> count);
+    printf("  Capacity: %zu\n", ht -> capacity);
 
     for (int i = 0; i < ht -> capacity; i++) {
         Node* node = ht -> nodes[i];
         if (node) {
             printf("\nNode %d:\n", i);
-            printf("  Name: %s\n", node -> filename);
+            printf("  Name: %s\n", node -> name);
             printf("  Path: %s\n", node -> path);
             printf("  Content-Hash: %x\n\n", node -> content_hash);
 
@@ -203,7 +165,8 @@ void print_hashtable(HashTable* ht) {
                 printf("  Dependencies:\n");
 
                 for (int k = 0; k < node -> dep_count; k++) {
-                    printf("    %d. %s\n", k, node -> dependencies[k]);
+                    printf("    %d. %s\n", k, node -> dependencies[k] -> name);
+                    printf("      Path: %s\n", node -> dependencies[k] -> path);
                 }
             }
         }
