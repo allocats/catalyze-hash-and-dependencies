@@ -34,25 +34,7 @@ void cleanup_and_exit(int code) {
     exit(code);
 }
 
-uint32_t checksum(const char* buffer, const char* name, struct stat st) {
-    uint32_t hash = 5381;
-
-    for (uint8_t i = 0; i < strlen(name); i++) {
-        hash = ((hash << 5) + hash) + name[i];
-    }
-
-    hash ^= (uint32_t) st.st_size;
-    hash ^= (uint32_t) (st.st_size >> 32);
-    hash ^= st.st_mtim.tv_nsec;
-
-    for (size_t i = 0; i < st.st_size; i++) {
-        hash = ((hash << 5) + hash) + buffer[i];
-    }
-
-    return hash;
-}
-
-void parse_include(const char* buffer) {
+void parse_include(HashTable* ht, const char* file, const char* buffer, struct stat st) {
     while (*buffer != '"') {
         if (*buffer == '<') return;
         buffer += 1;
@@ -66,64 +48,31 @@ void parse_include(const char* buffer) {
 
     const char* end = buffer;
     int len = end - start;
-    char copy[len + 1];
+
+    char* copy = arena_alloc(&arena, len + 1);
     strncpy(copy, start, len);
     copy[len] = 0;
 
-    char* slash_pos = strrchr(copy, '/'); 
-    const char* filename_start;
-
-    if (slash_pos != NULL) {
-        filename_start = slash_pos + 1;
-        len = strlen(filename_start);
-    } else {
-        filename_start = copy;
+    if (add_dependency(&arena, ht, extract_name(&arena, copy), file, buffer, st) != 0) {
+        fprintf(stderr, "Failed to add_dependency");
+        cleanup_and_exit(1);
     }
 
-    for (int i = 0; i < FILE_COUNT; i++) {
-        const char* source = strrchr(files[i], '/');
+    copy[len - 1] = 'c';
 
-        if (source == NULL) {
-            source = files[i];
-        } else {
-            source += 1;
-        }
-
-        if (strncmp(source, filename_start, len) == 0) {
-            printf("Found header %.*s looking for corresponding C file...\n", len, filename_start);
-
-            char c_file[len + 1];
-            strncpy(c_file, filename_start, len);
-            c_file[len] = 0;
-
-            if (len > 2 && c_file[len - 2] == '.' && c_file[len - 1] == 'h') {
-                c_file[len - 1] = 'c';
-            }
-
-            for (int j = 0; j < FILE_COUNT; j++) {
-                const char* c_source = strrchr(files[j], '/'); 
-                if (c_source == NULL) {
-                    c_source = files[j];
-                } else {
-                    c_source += 1;
-                }
-
-                if (strncmp(c_source, c_file, len) == 0) {
-                    printf("Found matching C file %.*s\n", len, c_file);
-                    break;
-                }
-            }
-        }
+    Node* c_file = search_name(ht, extract_name(&arena, copy));
+    if (c_file) {
+        // add to compile list
     }
 }
 
-void search_for_preprocessor(const char* buffer, size_t size) {
+void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, const char* file) {
     __m256i char_match = _mm256_set1_epi8('#');
 
     const char* current = buffer;
     size_t processed = 0;
 
-    while (processed + 32 <= size) {
+    while (processed + 32 <= st.st_size) {
         __m256i str = _mm256_lddqu_si256((__m256i*) current);
         __m256i result = _mm256_cmpeq_epi8(str, char_match);
         int mask = _mm256_movemask_epi8(result);
@@ -133,10 +82,10 @@ void search_for_preprocessor(const char* buffer, size_t size) {
                 int pos = __builtin_ctz(mask);
                 size_t abs_pos = processed + pos;
 
-                if (abs_pos > size) break;
+                if (abs_pos > st.st_size) break;
 
                 if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
-                    parse_include(buffer + abs_pos + 8);
+                    parse_include(ht, file, buffer + abs_pos + 8, st);
                 }               
 
                 mask &= mask - 1;
@@ -147,9 +96,9 @@ void search_for_preprocessor(const char* buffer, size_t size) {
         processed += 32;
     }
 
-    for (size_t i = processed; i < size; i++) {
+    for (size_t i = processed; i < st.st_size; i++) {
         if (buffer[i] == '#' && strncmp(buffer + i + 1, "include", 7) == 0) {
-            parse_include(buffer + i + 8);
+            parse_include(ht, file, buffer + i + 8, st);
         }
     }
 
@@ -234,22 +183,8 @@ void print_cache(CachedFiles* cache) {
     }
 }
 
-int main() {
-    CachedFiles* cache = load_hashes();
-
-    if (cache == NULL) {
-        // no cache
-    } else {
-        print_cache(cache);
-    }
-
-    HashTable* ht = create_hashtable(&arena, 128);
-
-    if (!ht) {
-        cleanup_and_exit(1);
-    }
-
-    for (int i = 0; i < FILE_COUNT; i++) {
+void load_hashtable(HashTable* ht, uint8_t count) {
+    for (int i = 0; i < count; i++) {
         int fd = open(files[i], O_RDONLY);
         if (fd == -1) {
             fprintf(stderr, "File not found!\n");
@@ -268,14 +203,41 @@ int main() {
             cleanup_and_exit(1);
         }
 
-        insert_hashtable(&arena, ht, files[i]);
-        // search_for_preprocessor(buffer, st.st_size);
+        insert_hashtable(&arena, ht, files[i], buffer, st);
+
+        search_for_preprocessor(ht, buffer, st, files[i]);
 
         munmap(buffer, st.st_size);
         close(fd);
     }
+}
+
+void build_without_cache(HashTable* ht, uint8_t count) {
+    for (int i = 0; i < count; i++) {
+
+    }
+}
+
+void build_with_cache(HashTable* ht, CachedFiles* cache){}
+
+int main() {
+    HashTable* ht = create_hashtable(&arena, 128);
+    if (!ht) {
+        cleanup_and_exit(1);
+    }
+
+    load_hashtable(ht, FILE_COUNT);
+
+    CachedFiles* cache = load_hashes();
+
+    if (cache == NULL) {
+        // no cache
+        build_without_cache(ht, FILE_COUNT);
+    } else {
+        // has cache
+        build_with_cache(ht, cache);
+    }
 
     print_hashtable(ht);
-
     cleanup_and_exit(0);
 }

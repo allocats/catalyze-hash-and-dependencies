@@ -36,38 +36,13 @@ static uint32_t hash_content(const char* buffer, const char* name, struct stat s
     return hash;
 }
 
-static uint32_t hash_file(const char* file) {
-    int fd = open(file, O_RDONLY);
-    if (fd == -1) {
-        return 0;
-    }
-
-    struct stat st;
-    if (fstat(fd, &st) == -1) {
-        close(fd);
-        return 0;
-    }
-
-    char* buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (buffer == MAP_FAILED) {
-        close(fd);
-        return 0;
-    }
-
-    uint32_t hash = hash_content(buffer, file, st);
-
-    munmap(buffer, st.st_size);
-    close(fd);
-    return hash;
-}
-
-static char* extract_name(Arena* arena, const char* path) {
+char* extract_name(Arena* arena, const char* path) {
     const char* last_slash = strrchr(path, '/');
     const char* start = last_slash ? last_slash + 1 : path;
     return arena_strdup(arena, start);
 }
 
-static Node* create_node(Arena* arena, const char* path) {
+static Node* create_node(Arena* arena, const char* path, const char* buffer, struct stat st) {
     Node* node = arena_alloc(arena, sizeof(Node));
 
     if (!node) {
@@ -76,11 +51,11 @@ static Node* create_node(Arena* arena, const char* path) {
 
     node -> path = arena_strdup(arena, path);
     node -> filename = extract_name(arena, path);
-    node -> content_hash = hash_file(path);
+    node -> content_hash = hash_content(path, buffer, st);
 
     node -> dependencies = arena_array_zero(arena, char*, 4);
     node -> dep_count = 0;
-    node -> dep_count = 4;
+    node -> dep_capacity = 4;
 
     node -> next = NULL;
 
@@ -113,20 +88,20 @@ HashTable* create_hashtable(Arena* arena, uint8_t capacity) {
     return ht;
 }
 
-uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path) {
-    uint32_t hash = hash_string(path);
+uint32_t insert_hashtable(Arena* arena, HashTable* ht, const char* path, const char* buffer, struct stat st) {
+    uint32_t hash = hash_string(extract_name(arena, path));
     uint32_t idx = hash & (ht -> capacity - 1);
 
     Node* current = ht -> nodes[idx];
     while (current) {
         if (strcmp(current -> path, path) == 0) {
-            current -> content_hash = hash_file(path);
+            current -> content_hash = hash_content(buffer, extract_name(arena, path), st);
             return 0;
         }
         current = current -> next;
     }
 
-    Node* node = create_node(arena, path);
+    Node* node = create_node(arena, path, buffer, st);
     if (!node) {
         return 1;
     }
@@ -197,32 +172,40 @@ static uint32_t node_add_dependency(Arena* arena, HashTable* ht, Node* node, con
     return 0;
 }
 
-uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const char* src) {
-    Node* node = search_path(ht, dest);
+uint32_t add_dependency(Arena* arena, HashTable* ht, const char* dest, const char* src, const char* buffer, struct stat st) {
+    Node* node = search_path(ht, src);
     if (!node) {
-        if (insert_hashtable(arena, ht, src) != 0) {
+        if (insert_hashtable(arena, ht, src, buffer, st) != 0) {
             return 1;
         }
 
-        node = search_path(ht, dest);
+        node = search_path(ht, src);
     }
 
-    return node_add_dependency(arena, ht, node, src);
+    return node_add_dependency(arena, ht, node, dest);
 }
 
 void print_hashtable(HashTable* ht) {
     printf("\n=== HashTable ===\n\n");
     printf("Stats:\n");
-    printf("\tCount: %d\n", ht -> count);
-    printf("\tCapacity: %d\n\n", ht -> capacity);
+    printf("  Count: %d\n", ht -> count);
+    printf("  Capacity: %d\n", ht -> capacity);
 
     for (int i = 0; i < ht -> capacity; i++) {
         Node* node = ht -> nodes[i];
         if (node) {
-            printf("Node %d:\n", i);
-            printf("\tName: %s\n", node -> filename);
-            printf("\tPath: %s\n", node -> path);
-            printf("\tContent-Hash: %x\n\n", node -> content_hash);
+            printf("\nNode %d:\n", i);
+            printf("  Name: %s\n", node -> filename);
+            printf("  Path: %s\n", node -> path);
+            printf("  Content-Hash: %x\n\n", node -> content_hash);
+
+            if (node -> dep_count > 0) {
+                printf("  Dependencies:\n");
+
+                for (int k = 0; k < node -> dep_count; k++) {
+                    printf("    %d. %s\n", k, node -> dependencies[k]);
+                }
+            }
         }
     }
     
