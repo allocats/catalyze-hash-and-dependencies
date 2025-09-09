@@ -155,7 +155,7 @@ void print_hashtable(HashTable* ht) {
 
     for (int i = 0; i < ht -> capacity; i++) {
         Node* node = ht -> nodes[i];
-        if (node) {
+        while (node) {
             printf("\nNode %d:\n", i);
             printf("  Name: %s\n", node -> name);
             printf("  Path: %s\n", node -> path);
@@ -169,6 +169,8 @@ void print_hashtable(HashTable* ht) {
                     printf("      Path: %s\n", node -> dependencies[k] -> path);
                 }
             }
+
+            node = node -> next;
         }
     }
     

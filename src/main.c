@@ -13,13 +13,15 @@
 
 static Arena arena = {0};
 
-#define FILE_COUNT 4
+#define FILE_COUNT 6 
 
 const char* files[FILE_COUNT] = {
     "test/main.c",
     "test/arena.h",
     "test/foo.c",
     "test/foo.h",
+    "test/lib/lib.h",
+    "test/lib2/lib.h",
 };
 
 typedef struct {
@@ -47,18 +49,33 @@ void parse_include(HashTable* ht, const char* file, const char* buffer, struct s
     }
 
     const char* end = buffer;
-    int len = end - start;
+    size_t len = end - start;
 
-    char* copy = arena_alloc(&arena, len + 1);
-    strncpy(copy, start, len);
-    copy[len] = 0;
+    char* include_start = arena_alloc(&arena, len + 1);
+    strncpy(include_start, start, len);
+    include_start[len] = 0;
+
+    // relational loop, where strrchr for every .. found in the path
+
+    char* slash = strrchr(file, '/');
+    if (!slash) {
+        if (add_dependency(ht, file, include_start) != 0) {
+            fprintf(stderr, "Failed to add_dependency");
+            cleanup_and_exit(1);
+        }
+    }
+
+    len += (slash - file + 1);
+
+    char copy[len];
+    strncpy(copy, file, slash + 1 - file);
+    copy[slash + 1 - file] = 0;
+    strcat(copy, include_start);
 
     if (add_dependency(ht, file, copy) != 0) {
         fprintf(stderr, "Failed to add_dependency");
         cleanup_and_exit(1);
     }
-
-    copy[len - 1] = 'c';
 }
 
 void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, const char* file) {
@@ -179,6 +196,10 @@ void print_cache(CachedFiles* cache) {
 }
 
 void load_hashtable(HashTable* ht, uint8_t count) {
+    for (int i = 0; i < count; i++) {
+        insert_ht(ht, files[i], 0);
+    }
+
     for (int i = 0; i < count; i++) {
         int fd = open(files[i], O_RDONLY);
         if (fd == -1) {

@@ -1,14 +1,3 @@
-/*
- *
- *  Inspired by tsoding's implementation at https://github.com/tsoding/arena
- *  Original work licensed under MIT License
- *
- *  Usage:
- *
- *      #include "arena.h"
- *
- */
-
 #ifndef ARENA_H
 #define ARENA_H 
 
