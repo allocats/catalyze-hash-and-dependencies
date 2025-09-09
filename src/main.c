@@ -55,21 +55,50 @@ void parse_include(HashTable* ht, const char* file, const char* buffer, struct s
     strncpy(include_start, start, len);
     include_start[len] = 0;
 
-    // relational loop, where strrchr for every .. found in the path
-
     char* slash = strrchr(file, '/');
     if (!slash) {
         if (add_dependency(ht, file, include_start) != 0) {
             fprintf(stderr, "Failed to add_dependency");
             cleanup_and_exit(1);
         }
+
+        return;
     }
 
-    len += (slash - file + 1);
+    char* dotdot = strstr(include_start, "../");
+    if (!dotdot) {
+        len += (slash - file + 1);
 
-    char copy[len];
-    strncpy(copy, file, slash + 1 - file);
-    copy[slash + 1 - file] = 0;
+        char copy[len];
+        strncpy(copy, file, slash + 1 - file);
+        copy[slash + 1 - file] = 0;
+        strcat(copy, include_start);
+
+        if (add_dependency(ht, file, copy) != 0) {
+            fprintf(stderr, "Failed to add_dependency");
+            cleanup_and_exit(1);
+        }
+
+        return;
+    } 
+
+    char* copy = arena_alloc(&arena, len);
+    strncpy(copy, file,  slash - file);
+    copy[slash - file] = 0;
+
+    while (dotdot && slash) {
+        char* prev_slash = strrchr(copy, '/');
+        if (prev_slash) {
+            *prev_slash = 0;
+        } else {
+            break;
+        }
+
+        include_start = dotdot + 3;
+        dotdot = strstr(include_start, "../");
+    }
+
+    strcat(copy, "/");
     strcat(copy, include_start);
 
     if (add_dependency(ht, file, copy) != 0) {
