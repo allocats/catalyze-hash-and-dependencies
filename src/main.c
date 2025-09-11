@@ -36,84 +36,82 @@ void cleanup_and_exit(int code) {
     exit(code);
 }
 
-void parse_include(HashTable* ht, const char* file, const char* buffer, struct stat st) {
+void parse_include(HashTable* ht, const char* file, char* buffer) {
     while (*buffer != '"') {
         if (*buffer == '<') return;
-        buffer += 1;
+        buffer++;
     }
-    buffer += 1;
+    buffer++;
 
-    const char* start = buffer;
+    char* start = buffer;
     while (*buffer != '"') {
-        buffer += 1;
+        buffer++;
     }
 
-    const char* end = buffer;
-    size_t len = end - start;
-
-    char* include_start = arena_alloc(&arena, len + 1);
-    strncpy(include_start, start, len);
-    include_start[len] = 0;
+    char saved_char = *buffer;
+    *buffer = 0;
 
     char* slash = strrchr(file, '/');
+    size_t dir_len = slash ? (slash - file + 1) : 0;
     if (!slash) {
-        if (add_dependency(ht, file, include_start) != 0) {
+        if (add_dependency(ht, file, start) != 0) {
             fprintf(stderr, "Failed to add_dependency");
             cleanup_and_exit(1);
         }
 
+        *buffer = saved_char;
         return;
     }
 
-    char* dotdot = strstr(include_start, "../");
+    char* dotdot = strstr(start, "../");
     if (!dotdot) {
-        len += (slash - file + 1);
+        size_t total_len = dir_len + strlen(start) + 1;
+        char* full_path = arena_alloc(&arena, total_len);
+        memcpy(full_path, file, dir_len);
+        strcpy(full_path + dir_len, start);
 
-        char copy[len];
-        strncpy(copy, file, slash + 1 - file);
-        copy[slash + 1 - file] = 0;
-        strcat(copy, include_start);
-
-        if (add_dependency(ht, file, copy) != 0) {
+        if (add_dependency(ht, file, full_path) != 0) {
             fprintf(stderr, "Failed to add_dependency");
             cleanup_and_exit(1);
         }
 
+        *buffer = saved_char;
         return;
     } 
 
-    char* copy = arena_alloc(&arena, len);
-    strncpy(copy, file,  slash - file);
-    copy[slash - file] = 0;
+    size_t base_len = slash - file;
+    char* path = arena_alloc(&arena, strlen(start) + base_len + 1);
+    memcpy(path, file, base_len);
+    path[base_len] = 0;
 
     while (dotdot && slash) {
-        char* prev_slash = strrchr(copy, '/');
+        char* prev_slash = strrchr(path, '/');
         if (prev_slash) {
             *prev_slash = 0;
         } else {
             break;
         }
 
-        include_start = dotdot + 3;
-        dotdot = strstr(include_start, "../");
+        start = dotdot + 3;
+        dotdot = strstr(start, "../");
     }
 
-    strcat(copy, "/");
-    strcat(copy, include_start);
+    strcat(path, "/");
+    strcat(path, start);
 
-    if (add_dependency(ht, file, copy) != 0) {
+    *buffer = saved_char;
+    if (add_dependency(ht, file, path) != 0) {
         fprintf(stderr, "Failed to add_dependency");
         cleanup_and_exit(1);
     }
 }
 
-void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, const char* file) {
+void search_for_preprocessor(HashTable* ht, char* buffer, size_t size, const char* file) {
     __m256i char_match = _mm256_set1_epi8('#');
-
     const char* current = buffer;
     size_t processed = 0;
 
-    while (processed + 32 <= st.st_size) {
+    while (processed + 32 <= size) {
         __m256i str = _mm256_lddqu_si256((__m256i*) current);
         __m256i result = _mm256_cmpeq_epi8(str, char_match);
         int mask = _mm256_movemask_epi8(result);
@@ -123,10 +121,10 @@ void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, 
                 int pos = __builtin_ctz(mask);
                 size_t abs_pos = processed + pos;
 
-                if (abs_pos > st.st_size) break;
+                if (abs_pos > size) break;
 
                 if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
-                    parse_include(ht, file, buffer + abs_pos + 8, st);
+                    parse_include(ht, file, buffer + abs_pos + 8);
                 }               
 
                 mask &= mask - 1;
@@ -137,9 +135,9 @@ void search_for_preprocessor(HashTable* ht, const char* buffer, struct stat st, 
         processed += 32;
     }
 
-    for (size_t i = processed; i < st.st_size; i++) {
+    for (size_t i = processed; i < size; i++) {
         if (buffer[i] == '#' && strncmp(buffer + i + 1, "include", 7) == 0) {
-            parse_include(ht, file, buffer + i + 8, st);
+            parse_include(ht, file, buffer + i + 8);
         }
     }
 
@@ -194,28 +192,25 @@ CachedFiles* parse_cache(char* buffer) {
 }
 
 CachedFiles* load_hashes() {
-    int fd = open("catalyze.cache", O_RDONLY);
-    if (fd == -1) {
-        return NULL;
-    }
+    return NULL;
 
-    struct stat st;
-    if (fstat(fd, &st) == -1) {
-        fprintf(stderr, "fstat failed!\n");
-        cleanup_and_exit(1);
-    }
-
-    char* buffer = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0); 
-    if (buffer == MAP_FAILED) {
-        fprintf(stderr, "Unable to allocate file!\n");
-        cleanup_and_exit(1);
-    }
-
-    CachedFiles* result = parse_cache(buffer);
-
-    close(fd);
-    munmap(buffer, st.st_size);
-    return result;
+    // int fd = open("catalyze.cache", O_RDONLY);
+    // if (fd == -1) {
+    //     return NULL;
+    // }
+    //
+    // size_t size = lseek(fd, 0, SEEK_END);
+    // char* buffer = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0); 
+    // if (buffer == MAP_FAILED) {
+    //     fprintf(stderr, "Unable to allocate file!\n");
+    //     cleanup_and_exit(1);
+    // }
+    //
+    // CachedFiles* result = parse_cache(buffer);
+    //
+    // close(fd);
+    // munmap(buffer, size);
+    // return result;
 }
 
 void print_cache(CachedFiles* cache) {
@@ -225,10 +220,6 @@ void print_cache(CachedFiles* cache) {
 }
 
 void load_hashtable(HashTable* ht, uint8_t count) {
-    for (int i = 0; i < count; i++) {
-        insert_ht(ht, files[i], 0);
-    }
-
     for (int i = 0; i < count; i++) {
         int fd = open(files[i], O_RDONLY);
         if (fd == -1) {
@@ -242,33 +233,42 @@ void load_hashtable(HashTable* ht, uint8_t count) {
             cleanup_and_exit(1);
         }
 
-        char* buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
-        if (buffer == MAP_FAILED) {
-            fprintf(stderr, "Unable to allocate file!\n");
-            cleanup_and_exit(1);
+        char* buffer;
+        if (st.st_size < 8192) {
+            buffer = malloc(st.st_size);
+            if (read(fd, buffer, st.st_size) == -1) {
+                fprintf(stderr, "Unable to read file!\n");
+                cleanup_and_exit(1);
+            }
+
+            uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
+
+            insert_ht(ht, files[i], hash);
+            search_for_preprocessor(ht, buffer, st.st_size, files[i]);
+
+            free(buffer);
+            close(fd);
+        } else {
+            buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
+            if (buffer == MAP_FAILED) {
+                fprintf(stderr, "Unable to allocate file!\n");
+                cleanup_and_exit(1);
+            }
+
+            uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
+
+            insert_ht(ht, files[i], hash);
+            search_for_preprocessor(ht, buffer, st.st_size, files[i]);
+
+            munmap(buffer, st.st_size);
+            close(fd);
         }
-
-
-        uint32_t hash = 5381;
-        for (const char* p = buffer; *p; p++) {
-            hash = ((hash << 5) + hash) ^ (unsigned char)*p;
-        }
-
-        insert_ht(ht, files[i], hash);
-        search_for_preprocessor(ht, buffer, st, files[i]);
-
-        munmap(buffer, st.st_size);
-        close(fd);
     }
 }
 
-void build_without_cache(HashTable* ht, uint8_t count) {
-    for (int i = 0; i < count; i++) {
+void build_without_cache(HashTable* ht, uint8_t count) {}
 
-    }
-}
-
-void build_with_cache(HashTable* ht, CachedFiles* cache){}
+void build_with_cache(HashTable* ht, CachedFiles* cache) {}
 
 int main() {
     HashTable* ht = create_hashtable(&arena, 128);
@@ -277,14 +277,11 @@ int main() {
     }
 
     load_hashtable(ht, FILE_COUNT);
-
     CachedFiles* cache = load_hashes();
 
     if (cache == NULL) {
-        // no cache
         build_without_cache(ht, FILE_COUNT);
     } else {
-        // has cache
         build_with_cache(ht, cache);
     }
 

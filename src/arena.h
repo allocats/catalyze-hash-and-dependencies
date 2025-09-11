@@ -20,7 +20,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
-#define DEFAULT_CAPACITY (4 * 1024) 
+#define DEFAULT_CAPACITY (2 * 1024) 
 
 #define arena_array(arena, type, count) \
     (type*) arena_alloc(arena, sizeof(type) * (count)) 
