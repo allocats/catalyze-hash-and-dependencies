@@ -235,11 +235,13 @@ void load_hashtable(HashTable* ht, uint8_t count) {
 
         char* buffer;
         if (st.st_size < 8192) {
-            buffer = malloc(st.st_size);
+            buffer = malloc(st.st_size + 1);
             if (read(fd, buffer, st.st_size) == -1) {
                 fprintf(stderr, "Unable to read file!\n");
                 cleanup_and_exit(1);
             }
+
+            buffer[st.st_size] = 0;
 
             uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
 
@@ -249,11 +251,13 @@ void load_hashtable(HashTable* ht, uint8_t count) {
             free(buffer);
             close(fd);
         } else {
-            buffer = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
+            buffer = mmap(NULL, st.st_size + 1, PROT_READ, MAP_PRIVATE, fd, 0); 
             if (buffer == MAP_FAILED) {
                 fprintf(stderr, "Unable to allocate file!\n");
                 cleanup_and_exit(1);
             }
+
+            buffer[st.st_size] = 0;
 
             uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
 
