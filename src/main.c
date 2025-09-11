@@ -126,8 +126,6 @@ void search_for_preprocessor(HashTable* ht, char* buffer, size_t size, const cha
             int pos = __builtin_ctz(mask1);
             size_t abs_pos = processed + pos;
 
-            if (abs_pos > size) break;
-
             if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
                 parse_include(ht, file, buffer + abs_pos + 8);
             }               
@@ -138,8 +136,6 @@ void search_for_preprocessor(HashTable* ht, char* buffer, size_t size, const cha
         while (mask2) {
             int pos = __builtin_ctz(mask2);
             size_t abs_pos = processed + 32 + pos;
-
-            if (abs_pos > size) break;
 
             if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
                 parse_include(ht, file, buffer + abs_pos + 8);
@@ -160,8 +156,6 @@ void search_for_preprocessor(HashTable* ht, char* buffer, size_t size, const cha
         while (mask) {
             int pos = __builtin_ctz(mask);
             size_t abs_pos = processed + pos;
-
-            if (abs_pos > size) break;
 
             if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
                 parse_include(ht, file, buffer + abs_pos + 8);
