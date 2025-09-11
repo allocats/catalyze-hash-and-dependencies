@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "arena.h"
@@ -111,31 +112,69 @@ void search_for_preprocessor(HashTable* ht, char* buffer, size_t size, const cha
     const char* current = buffer;
     size_t processed = 0;
 
+    while (processed + 64 <= size) {
+        __m256i str1 = _mm256_lddqu_si256((__m256i*) current);
+        __m256i str2 = _mm256_lddqu_si256((__m256i*) (current + 32));
+
+        __m256i result1 = _mm256_cmpeq_epi8(str1, char_match);
+        __m256i result2 = _mm256_cmpeq_epi8(str2, char_match);
+
+        int mask1 = _mm256_movemask_epi8(result1);
+        int mask2 = _mm256_movemask_epi8(result2);
+
+        while (mask1) {
+            int pos = __builtin_ctz(mask1);
+            size_t abs_pos = processed + pos;
+
+            if (abs_pos > size) break;
+
+            if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
+                parse_include(ht, file, buffer + abs_pos + 8);
+            }               
+
+            mask1 &= mask1 - 1;
+        }
+
+        while (mask2) {
+            int pos = __builtin_ctz(mask2);
+            size_t abs_pos = processed + 32 + pos;
+
+            if (abs_pos > size) break;
+
+            if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
+                parse_include(ht, file, buffer + abs_pos + 8);
+            }               
+
+            mask2 &= mask2 - 1;
+        }
+
+        current += 64;
+        processed += 64;
+    }
+
     while (processed + 32 <= size) {
         __m256i str = _mm256_lddqu_si256((__m256i*) current);
         __m256i result = _mm256_cmpeq_epi8(str, char_match);
         int mask = _mm256_movemask_epi8(result);
 
-        if (mask != 0) {
-            while (mask != 0) {
-                int pos = __builtin_ctz(mask);
-                size_t abs_pos = processed + pos;
+        while (mask) {
+            int pos = __builtin_ctz(mask);
+            size_t abs_pos = processed + pos;
 
-                if (abs_pos > size) break;
+            if (abs_pos > size) break;
 
-                if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
-                    parse_include(ht, file, buffer + abs_pos + 8);
-                }               
+            if (strncmp(buffer + abs_pos + 1, "include", 7) == 0) {
+                parse_include(ht, file, buffer + abs_pos + 8);
+            }               
 
-                mask &= mask - 1;
-            }
+            mask &= mask - 1;
         }
 
         current += 32;
         processed += 32;
     }
 
-    for (size_t i = processed; i < size; i++) {
+    for (size_t i = processed; i + 8 < size; i++) {
         if (buffer[i] == '#' && strncmp(buffer + i + 1, "include", 7) == 0) {
             parse_include(ht, file, buffer + i + 8);
         }
@@ -233,40 +272,46 @@ void load_hashtable(HashTable* ht, uint8_t count) {
             cleanup_and_exit(1);
         }
 
-        char* buffer;
+        if (st.st_size == 0) {
+            close(fd);
+            continue;
+        }
+
+        char* buffer = NULL;
+        int alloc_method = 0;
+
         if (st.st_size < 8192) {
-            buffer = malloc(st.st_size + 1);
-            if (read(fd, buffer, st.st_size) == -1) {
+            buffer = malloc(st.st_size);
+            ssize_t bytes_read = read(fd, buffer, st.st_size);
+
+            if (bytes_read != (ssize_t) st.st_size) {
                 fprintf(stderr, "Unable to read file!\n");
+                free(buffer);
+                close(fd);
                 cleanup_and_exit(1);
             }
-
-            buffer[st.st_size] = 0;
-
-            uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
-
-            insert_ht(ht, files[i], hash);
-            search_for_preprocessor(ht, buffer, st.st_size, files[i]);
-
-            free(buffer);
-            close(fd);
         } else {
-            buffer = mmap(NULL, st.st_size + 1, PROT_READ, MAP_PRIVATE, fd, 0); 
+            buffer = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0); 
             if (buffer == MAP_FAILED) {
                 fprintf(stderr, "Unable to allocate file!\n");
+                close(fd);
                 cleanup_and_exit(1);
             }
 
-            buffer[st.st_size] = 0;
-
-            uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
-
-            insert_ht(ht, files[i], hash);
-            search_for_preprocessor(ht, buffer, st.st_size, files[i]);
-
-            munmap(buffer, st.st_size);
-            close(fd);
+            alloc_method = 1;
         }
+
+        uint32_t hash = (uint32_t)(st.st_mtime ^ st.st_size ^ st.st_ino);
+        insert_ht(ht, files[i], hash);
+        search_for_preprocessor(ht, buffer, st.st_size, files[i]);
+
+        if (alloc_method == 0) {
+            free(buffer);
+        } else {
+            munmap(buffer, st.st_size);
+        }
+
+        close(fd);
     }
 }
 
@@ -289,6 +334,6 @@ int main() {
         build_with_cache(ht, cache);
     }
 
-    print_hashtable(ht);
+    // print_hashtable(ht);
     cleanup_and_exit(0);
 }

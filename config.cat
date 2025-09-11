@@ -14,7 +14,7 @@ target executable checksum {
 target debug checksum_debug {
 	auto_discovery: true
 	sources: src/
-	flags: -O0 -g3 -fsanitize=address -Weverything
+	flags: -O0 -mavx2 -g3 -fsanitize=address -Weverything
 	output: build/debug/checksum_debug
 }
 
